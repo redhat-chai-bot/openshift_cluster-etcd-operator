@@ -296,6 +296,8 @@ func getObservedTLSMinVersion(envVarContext envVarContext) (tlsutil.TLSVersion, 
 	}
 
 	// map tls version to string recognized by etcd
+	// Note: crypto.TLSVersion("") returns DefaultTLSVersion() (TLS 1.2),
+	// so an empty observedConfig during bootstrap is handled automatically.
 	v, err := crypto.TLSVersion(observedMinTLSVersion)
 	if err != nil {
 		return "", fmt.Errorf("couldn't get minTLSVersion from observedConfig: %w", err)
@@ -328,10 +330,20 @@ func getCipherSuites(envVarContext envVarContext) (map[string]string, error) {
 		return nil, fmt.Errorf("couldn't get cipherSuites from observedConfig: %w", err)
 	}
 
+	// During bootstrap the config observation controller hasn't converged yet,
+	// so observedConfig.servingInfo.cipherSuites will be empty. Fall back to
+	// TLSProfileIntermediateType defaults, matching the render path
+	// (pkg/cmd/render/env.go:getTLSCipherSuites).
+	if len(observedCipherSuites) == 0 {
+		klog.Warningf("observedConfig cipherSuites is empty, falling back to TLSProfileIntermediateType defaults")
+		profileSpec := v1.TLSProfiles[v1.TLSProfileIntermediateType]
+		observedCipherSuites = crypto.OpenSSLToIANACipherSuites(profileSpec.Ciphers)
+	}
+
 	actualCipherSuites := tlshelpers.SupportedEtcdCiphers(observedCipherSuites)
 
 	if len(actualCipherSuites) == 0 {
-		return nil, fmt.Errorf("no supported cipherSuites not found in observedConfig")
+		return nil, fmt.Errorf("no supported cipherSuites found in observedConfig")
 	}
 
 	observedMinTLSVersion, err := getObservedTLSMinVersion(envVarContext)
