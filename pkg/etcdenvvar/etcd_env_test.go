@@ -1,10 +1,106 @@
 package etcdenvvar
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
+	operatorv1 "github.com/openshift/api/operator/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/runtime"
 )
+
+func TestGetCipherSuites(t *testing.T) {
+	testCases := []struct {
+		name           string
+		observedConfig map[string]any
+		expectErr      bool
+		errContains    string
+		expectSentinel bool
+		expectEnvKey   string
+		expectCiphers  []string
+	}{
+		{
+			name: "populated observedConfig returns expected ciphers",
+			observedConfig: map[string]any{
+				"servingInfo": map[string]any{
+					"cipherSuites": []string{
+						"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+						"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+						"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+					},
+					"minTLSVersion": "VersionTLS12",
+				},
+			},
+			expectEnvKey: "ETCD_CIPHER_SUITES",
+			expectCiphers: []string{
+				"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+				"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+				"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+			},
+		},
+		{
+			name:           "empty observedConfig returns ErrObservedConfigNotReady",
+			observedConfig: map[string]any{},
+			expectErr:      true,
+			expectSentinel: true,
+		},
+		{
+			name: "observedConfig with only unsupported ciphers returns error",
+			observedConfig: map[string]any{
+				"servingInfo": map[string]any{
+					"cipherSuites": []string{
+						"TLS_UNSUPPORTED_CIPHER_1",
+						"TLS_UNSUPPORTED_CIPHER_2",
+					},
+					"minTLSVersion": "VersionTLS12",
+				},
+			},
+			expectErr:   true,
+			errContains: "no supported cipherSuites found",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			observedConfigYaml, err := yaml.Marshal(tc.observedConfig)
+			require.NoError(t, err)
+
+			ctx := envVarContext{
+				spec: operatorv1.StaticPodOperatorSpec{
+					OperatorSpec: operatorv1.OperatorSpec{
+						ObservedConfig: runtime.RawExtension{Raw: observedConfigYaml},
+					},
+				},
+			}
+
+			result, err := getCipherSuites(ctx)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.expectSentinel {
+					assert.True(t, errors.Is(err, ErrObservedConfigNotReady),
+						"expected ErrObservedConfigNotReady, got: %v", err)
+				}
+				if tc.errContains != "" {
+					assert.Contains(t, err.Error(), tc.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			cipherValue, ok := result[tc.expectEnvKey]
+			require.True(t, ok, "expected key %q in result", tc.expectEnvKey)
+
+			actualCiphers := strings.Split(cipherValue, ",")
+			assert.Equal(t, tc.expectCiphers, actualCiphers)
+		})
+	}
+}
 
 func TestConvertDBSize(t *testing.T) {
 	testCases := []struct {

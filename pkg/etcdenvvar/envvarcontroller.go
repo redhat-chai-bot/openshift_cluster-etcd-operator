@@ -2,6 +2,7 @@ package etcdenvvar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -134,6 +135,10 @@ func (c *EnvVarController) GetEnvVars() map[string]string {
 func (c *EnvVarController) sync(ctx context.Context) error {
 	err := c.checkEnvVars()
 	if err != nil {
+		if errors.Is(err, ErrObservedConfigNotReady) {
+			klog.V(2).Infof("EnvVarController: %v, waiting for config observer to converge", err)
+			return nil
+		}
 		_, _, updateErr := v1helpers.UpdateStatus(ctx, c.operatorClient, v1helpers.UpdateConditionFn(operatorv1.OperatorCondition{
 			Type:    "EnvVarControllerDegraded",
 			Status:  operatorv1.ConditionTrue,

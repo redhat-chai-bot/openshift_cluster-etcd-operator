@@ -30,6 +30,11 @@ import (
 	"github.com/ghodss/yaml"
 )
 
+// ErrObservedConfigNotReady is returned when the observedConfig has not yet
+// been populated by the config observer. Callers should treat this as a
+// transient condition during bootstrap and retry.
+var ErrObservedConfigNotReady = fmt.Errorf("observedConfig not yet populated")
+
 type envVarContext struct {
 	spec   operatorv1.StaticPodOperatorSpec
 	status operatorv1.StaticPodOperatorStatus
@@ -296,6 +301,8 @@ func getObservedTLSMinVersion(envVarContext envVarContext) (tlsutil.TLSVersion, 
 	}
 
 	// map tls version to string recognized by etcd
+	// Note: crypto.TLSVersion("") returns DefaultTLSVersion() (TLS 1.2),
+	// so an empty observedConfig during bootstrap is handled automatically.
 	v, err := crypto.TLSVersion(observedMinTLSVersion)
 	if err != nil {
 		return "", fmt.Errorf("couldn't get minTLSVersion from observedConfig: %w", err)
@@ -328,10 +335,14 @@ func getCipherSuites(envVarContext envVarContext) (map[string]string, error) {
 		return nil, fmt.Errorf("couldn't get cipherSuites from observedConfig: %w", err)
 	}
 
+	if len(observedCipherSuites) == 0 {
+		return nil, ErrObservedConfigNotReady
+	}
+
 	actualCipherSuites := tlshelpers.SupportedEtcdCiphers(observedCipherSuites)
 
 	if len(actualCipherSuites) == 0 {
-		return nil, fmt.Errorf("no supported cipherSuites not found in observedConfig")
+		return nil, fmt.Errorf("no supported cipherSuites found in observedConfig")
 	}
 
 	observedMinTLSVersion, err := getObservedTLSMinVersion(envVarContext)
