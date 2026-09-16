@@ -331,6 +331,15 @@ func getCipherSuites(envVarContext envVarContext) (map[string]string, error) {
 		return nil, fmt.Errorf("couldn't get cipherSuites from observedConfig: %w", err)
 	}
 
+	observedMinTLSVersion, err := getObservedTLSMinVersion(envVarContext)
+	if err != nil {
+		return nil, fmt.Errorf("unable to compute ETCD_CIPHER_SUITES: %v", err)
+	}
+	if observedMinTLSVersion == tlsutil.TLSVersion13 {
+		// etcd does not allow cipher suites to be configured when only TLS 1.3 is enabled.
+		return nil, nil
+	}
+
 	actualCipherSuites := tlshelpers.SupportedEtcdCiphers(observedCipherSuites)
 
 	if len(actualCipherSuites) == 0 {
@@ -356,20 +365,8 @@ func getCipherSuites(envVarContext envVarContext) (map[string]string, error) {
 		}
 	}
 
-	observedMinTLSVersion, err := getObservedTLSMinVersion(envVarContext)
-	if err != nil {
-		return nil, fmt.Errorf("unable to compute ETCD_CIPHER_SUITES: %v", err)
-	}
-
-	envName := "ETCD_CIPHER_SUITES"
-	if observedMinTLSVersion == tlsutil.TLSVersion13 {
-		// When --tls-min-version is set to 'TLS1.3', etcd does not allow --cipher-suites to also be specified.
-		// We still outout an env var for informational purposes.
-		envName = "CIPHER_SUITES"
-	}
-
 	return map[string]string{
-		envName: strings.Join(actualCipherSuites, ","),
+		"ETCD_CIPHER_SUITES": strings.Join(actualCipherSuites, ","),
 	}, nil
 }
 
